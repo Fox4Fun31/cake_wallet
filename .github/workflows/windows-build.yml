@@ -41,9 +41,23 @@ jobs:
           git config --global user.name "builds"
           git config --global --add safe.directory '*'
 
+      - name: Shadow sudo with no-op (configure refuses root)
+        run: |
+          mkdir -p "$HOME/bin"
+          cat > "$HOME/bin/sudo" <<'EOF'
+          #!/bin/bash
+          # GH Ubuntu runner has passwordless sudo. build_all.sh detects sudo and
+          # uses it, but coreutils' configure refuses to run as root. We shadow
+          # /usr/bin/sudo with a no-op so build_single.sh stays as the runner user.
+          exec "$@"
+          EOF
+          chmod +x "$HOME/bin/sudo"
+          echo "$HOME/bin" >> $GITHUB_PATH
+
       - name: Build Monero/Wownero native libs
         env:
           MAKE_JOB_COUNT: 4
+          FORCE_UNSAFE_CONFIGURE: 1
         run: |
           source $HOME/.cargo/env
           cd scripts/windows
