@@ -95,7 +95,8 @@ jobs:
       - name: Extract workspace
         shell: bash
         run: |
-          tar -xf "$RUNNER_TEMP/workspace.tar" -C "$GITHUB_WORKSPACE"
+          # --force-local: Git-Bash tar sees "D:\..." as remote host without this flag
+          tar --force-local -xf "$RUNNER_TEMP/workspace.tar" -C "$GITHUB_WORKSPACE"
           ls "$GITHUB_WORKSPACE" | head -40
 
       - name: Setup Flutter 3.27.4
