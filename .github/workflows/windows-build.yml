@@ -99,6 +99,17 @@ jobs:
           echo "--- release/wownero ---"
           ls -lh scripts/monero_c/release/wownero/
 
+      - name: Strip broken/unused dirs before tar (Win can't extract bad symlinks)
+        run: |
+          set -x
+          # Examples + Android dirs have symlinks pointing to non-existent paths
+          rm -rf scripts/bitbox_flutter/example scripts/bitbox_flutter/android
+          rm -rf scripts/reown_flutter/packages/reown_appkit/example
+          rm -rf scripts/reown_flutter/packages/reown_walletkit/example
+          rm -rf scripts/reown_flutter/packages/reown_core/example 2>/dev/null || true
+          # Sweep any remaining broken symlinks just in case
+          find . -xtype l -print -delete 2>/dev/null || true
+
       - name: Package workspace for Windows job
         run: |
           tar --exclude='.git' --exclude='**/.git' --exclude='scripts/monero_c/monero' --exclude='scripts/monero_c/wownero' --exclude='scripts/monero_c/zano' -cf /tmp/workspace.tar .
