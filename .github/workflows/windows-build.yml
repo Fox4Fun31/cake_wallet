@@ -198,9 +198,35 @@ jobs:
           Set-Content -Path $p -Value $c -NoNewline
           Write-Host "Patched cakewallet.bat"
 
-      - name: Run cakewallet.bat
+      - name: Run cakewallet.bat (setup + build, errors tolerated to capture verbose output)
         shell: cmd
+        continue-on-error: true
         run: cakewallet.bat "${{ steps.vcredist.outputs.path }}"
+
+      - name: Verify or re-run flutter build windows (verbose)
+        shell: cmd
+        run: |
+          if exist "build\windows\x64\runner\Release\CakeWallet.exe" (
+            echo CakeWallet.exe already built by cakewallet.bat — skipping.
+            exit /b 0
+          )
+          echo === build\windows\x64\runner\Release does not have CakeWallet.exe — running flutter build verbose ===
+          flutter doctor -v
+          flutter build windows --release --dart-define-from-file=env.json --verbose
+          if not exist "build\windows\x64\runner\Release\CakeWallet.exe" (
+            echo ##[error]Flutter build did not produce CakeWallet.exe
+            dir build\windows\x64\runner 2>&1
+            exit /b 1
+          )
+
+      - name: Stage Release bundle for Inno Setup (in case cakewallet.bat didn't)
+        shell: cmd
+        run: |
+          set TOOLS_ROOT=${{ steps.vcredist.outputs.path }}
+          copy /Y "%TOOLS_ROOT%\msvcp140.dll" "build\windows\x64\runner\Release\" >nul
+          copy /Y "%TOOLS_ROOT%\vcruntime140.dll" "build\windows\x64\runner\Release\" >nul
+          copy /Y "%TOOLS_ROOT%\vcruntime140_1.dll" "build\windows\x64\runner\Release\" >nul
+          dir "build\windows\x64\runner\Release"
 
       - name: Download VC++ Redistributable for installer
         shell: pwsh
