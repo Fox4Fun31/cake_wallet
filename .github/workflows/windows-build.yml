@@ -243,6 +243,49 @@ jobs:
             )
           )
 
+      - name: Stub cw_mweb generated_bindings.g.dart (MWEB unused on Windows)
+        shell: pwsh
+        run: |
+          $f = "cw_mweb/lib/generated_bindings.g.dart"
+          if (Test-Path $f) {
+            Write-Host "generated_bindings.g.dart already exists, skipping stub"
+          } else {
+            $stub = @'
+          // Stub for Windows build — MWEB (Litecoin-only) not built natively
+          // MWebFfi.instance is lazy; this stub keeps the code compilable.
+          // Throws at runtime if any method is actually invoked (won't happen with our coin config).
+          // ignore_for_file: non_constant_identifier_names, unused_field, camel_case_types
+          import 'dart:ffi';
+
+          class MWebFlutter {
+            final DynamicLibrary _dylib;
+            MWebFlutter(this._dylib);
+
+            int StartServer(
+              Pointer<Char> chain,
+              Pointer<Char> dataDir,
+              Pointer<Char> nodeUri,
+              Pointer<Pointer<Char>> errMsg,
+            ) => throw UnimplementedError('MWEB not available on Windows');
+
+            void StopServer() =>
+                throw UnimplementedError('MWEB not available on Windows');
+
+            Pointer<Char> Addresses(
+              Pointer<Char> scanSecret,
+              int scanLen,
+              Pointer<Char> spendPub,
+              int spendLen,
+              int fromIdx,
+              int toIdx,
+            ) => throw UnimplementedError('MWEB not available on Windows');
+          }
+          '@
+            Set-Content -Path $f -Value $stub -NoNewline
+            Write-Host "Wrote stub: $f"
+            Get-Content $f | Select-Object -First 10
+          }
+
       - name: Patch missing secrets (breezApiKey etc.)
         shell: pwsh
         run: |
