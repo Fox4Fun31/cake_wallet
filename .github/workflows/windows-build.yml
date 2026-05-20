@@ -243,6 +243,25 @@ jobs:
             )
           )
 
+      - name: Compile graphics (SVG -> .svg.vec into assets/new-ui)
+        shell: bash
+        run: |
+          # cakewallet.bat skips compile_graphics.sh — pubspec.yaml references assets/new-ui/* dirs.
+          # The script walks res/pictures/, runs vector_graphics_compiler, writes to assets/new-ui/.
+          set -e
+          export PATH="$PATH:/c/hostedtoolcache/windows/flutter/stable-3.32.0-x64/flutter/bin"
+          which dart
+          src="res/pictures"
+          dst="assets/new-ui"
+          while read -r dir; do
+            rel="${dir#$src}"
+            outdir="$dst$rel"
+            mkdir -p "$outdir"
+            dart run vector_graphics_compiler --input-dir "$dir" --out-dir "$outdir" 2>&1 | tail -3 || true
+          done < <(find "$src" -type d)
+          echo "--- generated tree ---"
+          find "$dst" -type d | head -30
+
       - name: Stub cw_mweb generated_bindings.g.dart (MWEB unused on Windows)
         shell: pwsh
         run: |
