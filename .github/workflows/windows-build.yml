@@ -24,7 +24,39 @@ jobs:
       - name: Install minimal deps (curl, unzip, mingw runtime for libssp/libwinpthread)
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl unzip gcc-mingw-w64-x86-64
+          sudo apt-get install -y curl unzip gcc-mingw-w64-x86-64 wget
+
+      - name: Fetch prebuilt Torch Dart
+        run: |
+          set -x -e
+          cd scripts
+          rm -rf torch_dart
+          wget -q https://github.com/MrCyjaneK/torch_dart/releases/download/v1.0.17/torch_dart-v1.0.17.tar.gz -O torch_dart.tar.gz
+          mkdir torch_dart
+          tar -xzf torch_dart.tar.gz -C torch_dart
+          rm torch_dart.tar.gz
+          ls torch_dart | head -5
+
+      - name: Fetch prebuilt Reown Flutter
+        run: |
+          set -x -e
+          cd scripts
+          rm -rf reown_flutter
+          wget -q https://github.com/cake-tech/reown_flutter/releases/download/v0.0.4/reown_flutter-v0.0.4.tar.gz -O reown_flutter.tar.gz
+          mkdir reown_flutter
+          tar -xzf reown_flutter.tar.gz -C reown_flutter
+          rm reown_flutter.tar.gz
+          ls reown_flutter | head -5
+
+      - name: Clone bitbox_flutter (pub-get path dep, no native build needed)
+        run: |
+          set -x -e
+          cd scripts
+          rm -rf bitbox_flutter
+          git clone https://github.com/konstantinullrich/bitbox_flutter
+          cd bitbox_flutter
+          git checkout 5a6e6dd388ef64003f86094af80d5453518b601d
+          ls | head -10
 
       - name: Fetch prebuilt monero_c bundle + map to old layout
         run: |
@@ -102,10 +134,10 @@ jobs:
           tar --force-local -xf "$RUNNER_TEMP/workspace.tar"
           ls | head -40
 
-      - name: Setup Flutter 3.27.4
+      - name: Setup Flutter 3.32.0
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.4'
+          flutter-version: '3.32.0'
           channel: stable
           cache: true
 
