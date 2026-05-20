@@ -209,9 +209,9 @@ jobs:
       - name: Fix cake_wallet build prerequisites (mobx codegen + secrets)
         shell: cmd
         run: |
-          REM cakewallet.bat misses several cw_* packages in its for loop + skips root mobx codegen.
-          REM Run build_runner in ALL cw_* dirs and in root.
-          for /d %%i in (cw_core cw_monero cw_wownero cw_bitcoin cw_ethereum cw_evm cw_polygon cw_nano cw_bitcoin_cash cw_solana cw_tron cw_base cw_arbitrum cw_dogecoin cw_zano cw_mweb cw_decred cw_shared_external) do (
+          REM Use official model_generator.sh's package list (cw_polygon/base/arbitrum have no generators)
+          REM cw_mweb is special: only pub get, no build_runner
+          for %%i in (cw_core cw_evm cw_monero cw_bitcoin cw_nano cw_bitcoin_cash cw_solana cw_tron cw_wownero cw_zano cw_decred cw_dogecoin) do (
             if exist %%i\pubspec.yaml (
               echo === build_runner in %%i ===
               pushd %%i
@@ -220,10 +220,28 @@ jobs:
               popd
             )
           )
-          REM Root project: critical for lib/view_model/*.g.dart
-          echo === build_runner in root ===
-          call dart pub get
+          echo === flutter pub get cw_mweb (no codegen) ===
+          if exist cw_mweb\pubspec.yaml (
+            pushd cw_mweb
+            call flutter pub get
+            popd
+          )
+          echo === root pub get + build_runner ===
+          REM "Bad state: Cannot recurse" workaround: clean .dart_tool first
+          if exist .dart_tool rmdir /s /q .dart_tool
+          call flutter pub get
+          REM Try root build_runner; if it fails, retry once
           call dart run build_runner build --delete-conflicting-outputs
+          if errorlevel 1 (
+            echo === Root build_runner failed, retrying after clean ===
+            if exist .dart_tool rmdir /s /q .dart_tool
+            call flutter pub get
+            call dart run build_runner build --delete-conflicting-outputs
+            if errorlevel 1 (
+              echo ##[error]Root build_runner failed twice
+              exit /b 1
+            )
+          )
 
       - name: Patch missing secrets (breezApiKey etc.)
         shell: pwsh
