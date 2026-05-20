@@ -1,0 +1,85 @@
+name: Package Installer (from existing ZIP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Workflow run ID that produced a Cake-Wallet-Windows-<ref> artifact'
+        required: true
+      ref:
+        description: 'Git ref that was built (for checkout + filename)'
+        required: false
+        default: 'v6.1.2'
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (for .iss script, LICENSE, icon)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download ZIP artifact from source run
+        uses: actions/download-artifact@v4
+        with:
+          name: Cake-Wallet-Windows-${{ inputs.ref }}
+          path: ${{ runner.temp }}/artifact
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract ZIP into build\windows\x64\runner\Release
+        shell: pwsh
+        run: |
+          $artifactDir = "$env:RUNNER_TEMP\artifact"
+          $zipPath = Get-ChildItem -Path $artifactDir -Filter "*.zip" -Recurse | Select-Object -First 1
+          if (-not $zipPath) { Write-Error "No ZIP found in artifact"; exit 1 }
+          Write-Host "Found: $($zipPath.FullName)"
+
+          $extractDir = "$env:RUNNER_TEMP\extracted"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          Expand-Archive -Path $zipPath.FullName -DestinationPath $extractDir -Force
+
+          $releaseDir = "build\windows\x64\runner\Release"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+
+          # ZIP contains either "Cake Wallet" subfolder or files directly
+          $cakeFolder = Join-Path $extractDir "Cake Wallet"
+          if (Test-Path $cakeFolder) {
+            Copy-Item -Path "$cakeFolder\*" -Destination $releaseDir -Recurse -Force
+          } else {
+            Copy-Item -Path "$extractDir\*" -Destination $releaseDir -Recurse -Force
+          }
+
+          Write-Host "Contents of $releaseDir :"
+          Get-ChildItem $releaseDir | Select-Object Name, Length | Format-Table
+
+      - name: Download VC++ Redistributable
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "scripts\windows\vc_redist.x64.exe"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer (Inno Setup)
+        shell: cmd
+        working-directory: scripts\windows
+        run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build_exe_installer.iss'
+
+      - name: Rename installer
+        shell: pwsh
+        run: |
+          $ref = "${{ inputs.ref }}"
+          Move-Item "cakewallet_setup.exe" "Cake_Wallet_${ref}_Windows.exe"
+          Get-ChildItem "Cake_Wallet_*_Windows.exe" | Select-Object Name, Length
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cake-Wallet-Installer-${{ inputs.ref }}
+          path: "Cake_Wallet_*_Windows.exe"
+          retention-days: 90
+          if-no-files-found: error
