@@ -1,0 +1,131 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build (tag/branch/sha)'
+        required: false
+        default: 'v6.1.2'
+
+jobs:
+  build-natives:
+    name: Build native libs (Linux)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'v6.1.2' }}
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf build-essential ccache cmake curl gcc \
+            gcc-mingw-w64-x86-64 git g++ g++-mingw-w64-x86-64 gperf lbzip2 libtool \
+            make pkg-config pigz xz-utils
+
+      - name: Install Rust (with mingw target)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          source $HOME/.cargo/env
+          rustup target add x86_64-pc-windows-gnu
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "builds@cakewallet.com"
+          git config --global user.name "builds"
+          git config --global --add safe.directory '*'
+
+      - name: Build Monero/Wownero native libs
+        env:
+          MAKE_JOB_COUNT: 4
+        run: |
+          source $HOME/.cargo/env
+          cd scripts/windows
+          ./build_all.sh
+
+      - name: Package workspace for Windows job
+        run: |
+          tar --exclude='.git' --exclude='**/.git' --exclude='scripts/monero_c/monero' --exclude='scripts/monero_c/wownero' --exclude='scripts/monero_c/zano' -cf /tmp/workspace.tar .
+          ls -lh /tmp/workspace.tar
+
+      - name: Upload workspace artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cake-wallet-workspace
+          path: /tmp/workspace.tar
+          retention-days: 1
+          compression-level: 1
+
+  build-app:
+    name: Build Flutter Windows app
+    needs: build-natives
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - name: Download workspace
+        uses: actions/download-artifact@v4
+        with:
+          name: cake-wallet-workspace
+          path: ${{ runner.temp }}
+
+      - name: Extract workspace
+        shell: bash
+        run: |
+          tar -xf "$RUNNER_TEMP/workspace.tar" -C "$GITHUB_WORKSPACE"
+          ls "$GITHUB_WORKSPACE" | head -40
+
+      - name: Setup Flutter 3.27.4
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.4'
+          channel: stable
+          cache: true
+
+      - name: Setup NuGet
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\Program Files\Nuget" | Out-Null
+          Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile "C:\Program Files\Nuget\nuget.exe"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Nuget"
+
+      - name: Locate VC++ Redist (VC143.CRT)
+        id: vcredist
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC",
+            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Redist\MSVC",
+            "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Redist\MSVC",
+            "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC"
+          )
+          $found = $null
+          foreach ($base in $candidates) {
+            if (Test-Path $base) {
+              $dir = Get-ChildItem -Path $base -Directory | Sort-Object Name -Descending | Select-Object -First 1
+              if ($dir) {
+                $candidate = Join-Path $dir.FullName "x64\Microsoft.VC143.CRT"
+                if (Test-Path $candidate) { $found = $candidate; break }
+              }
+            }
+          }
+          if (-not $found) { Write-Error "Could not find VC143.CRT"; exit 1 }
+          Write-Host "VC++ Redist path: $found"
+          "path=$found" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Run cakewallet.bat
+        shell: cmd
+        run: cakewallet.bat "${{ steps.vcredist.outputs.path }}"
+
+      - name: Upload Cake Wallet.zip
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cake-Wallet-Windows-${{ inputs.ref || 'v6.1.2' }}
+          path: "Cake Wallet.zip"
+          retention-days: 30
+          if-no-files-found: error
