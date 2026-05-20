@@ -211,10 +211,17 @@ jobs:
             exit /b 0
           )
           echo === build\windows\x64\runner\Release does not have CakeWallet.exe — running flutter build verbose ===
-          flutter doctor -v
-          flutter build windows --release --dart-define-from-file=env.json --verbose
+          REM CRITICAL: flutter is a .bat — without "call" control transfers permanently
+          call flutter --version
+          echo Exit code after --version: %ERRORLEVEL%
+          call flutter build windows --release --verbose 2>&1
+          echo Exit code after build: %ERRORLEVEL%
           if not exist "build\windows\x64\runner\Release\CakeWallet.exe" (
             echo ##[error]Flutter build did not produce CakeWallet.exe
+            echo --- listing build tree ---
+            dir build 2>&1
+            dir build\windows 2>&1
+            dir build\windows\x64 2>&1
             dir build\windows\x64\runner 2>&1
             exit /b 1
           )
