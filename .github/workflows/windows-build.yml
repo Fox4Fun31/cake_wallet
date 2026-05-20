@@ -206,26 +206,61 @@ jobs:
         continue-on-error: true
         run: cakewallet.bat "${{ steps.vcredist.outputs.path }}"
 
+      - name: Fix cake_wallet build prerequisites (mobx codegen + secrets)
+        shell: cmd
+        run: |
+          REM cakewallet.bat misses several cw_* packages in its for loop + skips root mobx codegen.
+          REM Run build_runner in ALL cw_* dirs and in root.
+          for /d %%i in (cw_core cw_monero cw_wownero cw_bitcoin cw_ethereum cw_evm cw_polygon cw_nano cw_bitcoin_cash cw_solana cw_tron cw_base cw_arbitrum cw_dogecoin cw_zano cw_mweb cw_decred cw_shared_external) do (
+            if exist %%i\pubspec.yaml (
+              echo === build_runner in %%i ===
+              pushd %%i
+              call flutter pub get
+              call dart run build_runner build --delete-conflicting-outputs
+              popd
+            )
+          )
+          REM Root project: critical for lib/view_model/*.g.dart
+          echo === build_runner in root ===
+          call dart pub get
+          call dart run build_runner build --delete-conflicting-outputs
+
+      - name: Patch missing secrets (breezApiKey etc.)
+        shell: pwsh
+        run: |
+          # cw_bitcoin needs breezApiKey from Linux workflow's secrets step
+          $f = "cw_bitcoin/lib/.secrets.g.dart"
+          if (-not (Test-Path $f)) { New-Item -ItemType File -Path $f | Out-Null }
+          $existing = Get-Content $f -Raw -ErrorAction SilentlyContinue
+          if ($null -eq $existing) { $existing = "" }
+          $needed = @{
+            "breezApiKey" = "''"
+          }
+          foreach ($k in $needed.Keys) {
+            if ($existing -notmatch "const\s+$k\s*=") {
+              Add-Content -Path $f -Value "const $k = $($needed[$k]);"
+              Write-Host "Added: const $k"
+            }
+          }
+          Get-Content $f
+
       - name: Verify or re-run flutter build windows (verbose)
         shell: cmd
         run: |
           if exist "build\windows\x64\runner\Release\CakeWallet.exe" (
-            echo CakeWallet.exe already built by cakewallet.bat — skipping.
+            echo CakeWallet.exe already built — skipping.
             exit /b 0
           )
-          echo === build\windows\x64\runner\Release does not have CakeWallet.exe — running flutter build verbose ===
-          REM CRITICAL: flutter is a .bat — without "call" control transfers permanently
+          echo === Running verbose flutter build windows ===
           call flutter --version
           echo Exit code after --version: %ERRORLEVEL%
           call flutter build windows --release --verbose 2>&1
           echo Exit code after build: %ERRORLEVEL%
           if not exist "build\windows\x64\runner\Release\CakeWallet.exe" (
             echo ##[error]Flutter build did not produce CakeWallet.exe
-            echo --- listing build tree ---
             dir build 2>&1
             dir build\windows 2>&1
             dir build\windows\x64 2>&1
-            dir build\windows\x64\runner 2>&1
             exit /b 1
           )
 
