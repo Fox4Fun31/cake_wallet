@@ -115,29 +115,36 @@ jobs:
           Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile "C:\Program Files\Nuget\nuget.exe"
           Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Nuget"
 
-      - name: Locate VC++ Redist (VC143.CRT)
+      - name: Locate VC++ Redist (msvcp140.dll dir)
         id: vcredist
         shell: pwsh
         run: |
-          $candidates = @(
-            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC",
-            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Redist\MSVC",
-            "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Redist\MSVC",
-            "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC"
-          )
-          $found = $null
-          foreach ($base in $candidates) {
-            if (Test-Path $base) {
-              $dir = Get-ChildItem -Path $base -Directory | Sort-Object Name -Descending | Select-Object -First 1
-              if ($dir) {
-                $candidate = Join-Path $dir.FullName "x64\Microsoft.VC143.CRT"
-                if (Test-Path $candidate) { $found = $candidate; break }
+          # Find msvcp140.dll anywhere under VS install or system; pick first x64 match
+          $roots = @(
+            "C:\Program Files\Microsoft Visual Studio",
+            "C:\Program Files (x86)\Microsoft Visual Studio",
+            "C:\Program Files\Microsoft Visual Studio\2022",
+            "C:\Windows\System32"
+          ) | Where-Object { Test-Path $_ }
+          $dll = $null
+          foreach ($root in $roots) {
+            Write-Host "Searching for msvcp140.dll under: $root"
+            $found = Get-ChildItem -Path $root -Recurse -Filter "msvcp140.dll" -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName -match "x64|\\System32" } |
+                     Select-Object -First 1
+            if ($found) {
+              # Verify vcruntime140.dll is also there
+              $dir = Split-Path $found.FullName -Parent
+              if ((Test-Path (Join-Path $dir "vcruntime140.dll")) -and (Test-Path (Join-Path $dir "vcruntime140_1.dll"))) {
+                $dll = $found
+                break
               }
             }
           }
-          if (-not $found) { Write-Error "Could not find VC143.CRT"; exit 1 }
-          Write-Host "VC++ Redist path: $found"
-          "path=$found" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if (-not $dll) { Write-Error "msvcp140.dll + vcruntime140 trio not found"; exit 1 }
+          $path = Split-Path $dll.FullName -Parent
+          Write-Host "VC++ Redist path: $path"
+          "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Run cakewallet.bat
         shell: cmd
