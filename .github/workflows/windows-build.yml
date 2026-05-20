@@ -95,9 +95,12 @@ jobs:
       - name: Extract workspace
         shell: bash
         run: |
-          # --force-local: Git-Bash tar sees "D:\..." as remote host without this flag
-          tar --force-local -xf "$RUNNER_TEMP/workspace.tar" -C "$GITHUB_WORKSPACE"
-          ls "$GITHUB_WORKSPACE" | head -40
+          # GNU tar parses "D:\..." as remote host. Workarounds:
+          # 1) --force-local for the archive path
+          # 2) cd into target instead of -C "<windows-path>"
+          cd "$GITHUB_WORKSPACE"
+          tar --force-local -xf "$RUNNER_TEMP/workspace.tar"
+          ls | head -40
 
       - name: Setup Flutter 3.27.4
         uses: subosito/flutter-action@v2
