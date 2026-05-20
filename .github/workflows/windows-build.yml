@@ -99,15 +99,18 @@ jobs:
           echo "--- release/wownero ---"
           ls -lh scripts/monero_c/release/wownero/
 
-      - name: Strip broken/unused dirs before tar (Win can't extract bad symlinks)
+      - name: Strip broken symlinks + unused examples before tar
         run: |
           set -x
-          # Examples + Android dirs have symlinks pointing to non-existent paths
-          rm -rf scripts/bitbox_flutter/example scripts/bitbox_flutter/android
+          # Examples folders have Flutter ephemeral symlinks to ~/.pub-cache
+          rm -rf scripts/bitbox_flutter/example
           rm -rf scripts/reown_flutter/packages/reown_appkit/example
           rm -rf scripts/reown_flutter/packages/reown_walletkit/example
           rm -rf scripts/reown_flutter/packages/reown_core/example 2>/dev/null || true
-          # Sweep any remaining broken symlinks just in case
+          # KEEP bitbox_flutter/android source (Java/Kotlin) — Flutter scans it even for Windows build
+          # Only delete broken symlinks within bitbox_flutter (api.aar -> go/, jniLibs/*.so)
+          find scripts/bitbox_flutter -xtype l -print -delete 2>/dev/null || true
+          # Sweep any other broken symlinks
           find . -xtype l -print -delete 2>/dev/null || true
 
       - name: Package workspace for Windows job
