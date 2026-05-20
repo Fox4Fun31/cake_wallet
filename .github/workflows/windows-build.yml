@@ -10,9 +10,9 @@ on:
 
 jobs:
   build-natives:
-    name: Build native libs (Linux)
+    name: Fetch native libs (Linux)
     runs-on: ubuntu-22.04
-    timeout-minutes: 240
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,47 +21,51 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Install build deps
+      - name: Install minimal deps (curl, unzip, mingw runtime for libssp/libwinpthread)
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf build-essential ccache cmake curl gcc \
-            gcc-mingw-w64-x86-64 git g++ g++-mingw-w64-x86-64 gperf lbzip2 libtool \
-            make pkg-config pigz xz-utils
+          sudo apt-get install -y curl unzip gcc-mingw-w64-x86-64
 
-      - name: Install Rust (with mingw target)
+      - name: Fetch prebuilt monero_c bundle + map to old layout
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          source $HOME/.cargo/env
-          rustup target add x86_64-pc-windows-gnu
-
-      - name: Configure git identity
-        run: |
-          git config --global user.email "builds@cakewallet.com"
-          git config --global user.name "builds"
-          git config --global --add safe.directory '*'
-
-      - name: Shadow sudo with no-op (configure refuses root)
-        run: |
-          mkdir -p "$HOME/bin"
-          cat > "$HOME/bin/sudo" <<'EOF'
-          #!/bin/bash
-          # GH Ubuntu runner has passwordless sudo. build_all.sh detects sudo and
-          # uses it, but coreutils' configure refuses to run as root. We shadow
-          # /usr/bin/sudo with a no-op so build_single.sh stays as the runner user.
-          exec "$@"
-          EOF
-          chmod +x "$HOME/bin/sudo"
-          echo "$HOME/bin" >> $GITHUB_PATH
-
-      - name: Build Monero/Wownero native libs
-        env:
-          MAKE_JOB_COUNT: 4
-          FORCE_UNSAFE_CONFIGURE: 1
-        run: |
-          source $HOME/.cargo/env
-          cd scripts/windows
-          ./build_all.sh
+          set -x -e
+          # Download the prebuilt monero_c release bundle (saves 1-3h source build).
+          # cake_wallet's windows/CMakeLists.txt at v6.1.2 still expects the OLD layout:
+          #   release/monero/x86_64-w64-mingw32_libwallet2_api_c.dll
+          #   release/wownero/x86_64-w64-mingw32_libwallet2_api_c.dll
+          #   release/monero/x86_64-w64-mingw32_libssp-0.dll
+          #   release/monero/x86_64-w64-mingw32_libwinpthread-1.dll
+          # Bundle now provides:
+          #   x86_64-w64-mingw32/lib{monero,wownero}_wallet2_api_c.dll
+          mkdir -p /tmp/monerc && cd /tmp/monerc
+          curl -sL -o release-bundle.zip "https://github.com/MrCyjaneK/monero_c/releases/download/v0.18.4.6-RC1/release-bundle.zip"
+          unzip -q release-bundle.zip
+          rm release-bundle.zip
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p scripts/monero_c/release/monero scripts/monero_c/release/wownero
+          cp -v /tmp/monerc/x86_64-w64-mingw32/libmonero_wallet2_api_c.dll  scripts/monero_c/release/monero/x86_64-w64-mingw32_libwallet2_api_c.dll
+          cp -v /tmp/monerc/x86_64-w64-mingw32/libwownero_wallet2_api_c.dll scripts/monero_c/release/wownero/x86_64-w64-mingw32_libwallet2_api_c.dll
+          # libssp-0.dll + libwinpthread-1.dll from mingw-w64 runtime
+          LIBSSP=$(find /usr -name 'libssp-0.dll' 2>/dev/null | head -1)
+          LIBWINPTHREAD=$(find /usr -name 'libwinpthread-1.dll' 2>/dev/null | head -1)
+          echo "libssp-0.dll: $LIBSSP"
+          echo "libwinpthread-1.dll: $LIBWINPTHREAD"
+          if [ -n "$LIBSSP" ]; then
+            cp -v "$LIBSSP" scripts/monero_c/release/monero/x86_64-w64-mingw32_libssp-0.dll
+          else
+            echo "::warning::libssp-0.dll not found, patching CMakeLists.txt to skip"
+            sed -i '/x86_64-w64-mingw32_libssp-0\.dll/,/COMPONENT Runtime)/d' windows/CMakeLists.txt
+          fi
+          if [ -n "$LIBWINPTHREAD" ]; then
+            cp -v "$LIBWINPTHREAD" scripts/monero_c/release/monero/x86_64-w64-mingw32_libwinpthread-1.dll
+          else
+            echo "::warning::libwinpthread-1.dll not found, patching CMakeLists.txt to skip"
+            sed -i '/x86_64-w64-mingw32_libwinpthread-1\.dll/,/COMPONENT Runtime)/d' windows/CMakeLists.txt
+          fi
+          echo "--- release/monero ---"
+          ls -lh scripts/monero_c/release/monero/
+          echo "--- release/wownero ---"
+          ls -lh scripts/monero_c/release/wownero/
 
       - name: Package workspace for Windows job
         run: |
