@@ -115,36 +115,45 @@ jobs:
           Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile "C:\Program Files\Nuget\nuget.exe"
           Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Nuget"
 
-      - name: Locate VC++ Redist (msvcp140.dll dir)
+      - name: Locate VC++ Redist (prefer System32, no path-spaces)
         id: vcredist
         shell: pwsh
         run: |
-          # Find msvcp140.dll anywhere under VS install or system; pick first x64 match
-          $roots = @(
-            "C:\Program Files\Microsoft Visual Studio",
-            "C:\Program Files (x86)\Microsoft Visual Studio",
-            "C:\Program Files\Microsoft Visual Studio\2022",
-            "C:\Windows\System32"
-          ) | Where-Object { Test-Path $_ }
-          $dll = $null
-          foreach ($root in $roots) {
-            Write-Host "Searching for msvcp140.dll under: $root"
-            $found = Get-ChildItem -Path $root -Recurse -Filter "msvcp140.dll" -ErrorAction SilentlyContinue |
-                     Where-Object { $_.FullName -match "x64|\\System32" } |
-                     Select-Object -First 1
-            if ($found) {
-              # Verify vcruntime140.dll is also there
-              $dir = Split-Path $found.FullName -Parent
-              if ((Test-Path (Join-Path $dir "vcruntime140.dll")) -and (Test-Path (Join-Path $dir "vcruntime140_1.dll"))) {
-                $dll = $found
-                break
-              }
+          # System32 always has msvcp140 + vcruntime140 on Win Server runners,
+          # AND has no spaces in path (avoids cmd parsing issues in cakewallet.bat).
+          # Fallback: search VS install if missing.
+          $sys32 = "C:\Windows\System32"
+          $hasAll = (Test-Path "$sys32\msvcp140.dll") -and (Test-Path "$sys32\vcruntime140.dll") -and (Test-Path "$sys32\vcruntime140_1.dll")
+          if ($hasAll) {
+            $path = $sys32
+          } else {
+            $roots = @(
+              "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC",
+              "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Redist\MSVC",
+              "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Redist\MSVC",
+              "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC"
+            ) | Where-Object { Test-Path $_ }
+            $found = $null
+            foreach ($root in $roots) {
+              $latestVer = Get-ChildItem -Path $root -Directory | Sort-Object Name -Descending | Select-Object -First 1
+              if (-not $latestVer) { continue }
+              $crtDir = Get-ChildItem -Path $latestVer.FullName -Recurse -Directory | Where-Object { $_.Name -like "*VC*CRT" -and $_.FullName -match "x64" } | Select-Object -First 1
+              if ($crtDir -and (Test-Path (Join-Path $crtDir.FullName "msvcp140.dll"))) { $found = $crtDir.FullName; break }
             }
+            if (-not $found) { Write-Error "VC++ Redist not found"; exit 1 }
+            $path = $found
           }
-          if (-not $dll) { Write-Error "msvcp140.dll + vcruntime140 trio not found"; exit 1 }
-          $path = Split-Path $dll.FullName -Parent
           Write-Host "VC++ Redist path: $path"
           "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Patch cakewallet.bat to dequote arg (%1 -> %~1)
+        shell: pwsh
+        run: |
+          $p = "cakewallet.bat"
+          $c = Get-Content $p -Raw
+          $c = $c -replace 'set tools_root=%1', 'set tools_root=%~1'
+          Set-Content -Path $p -Value $c -NoNewline
+          Write-Host "Patched cakewallet.bat"
 
       - name: Run cakewallet.bat
         shell: cmd
