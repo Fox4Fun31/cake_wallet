@@ -192,38 +192,87 @@ jobs:
           Write-Host "VC++ Redist path: $path"
           "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Patch runner main.cpp (redirect stdio to NUL so GUI launch doesn't fastfail)
+      - name: Patch runner main.cpp (NUL stdio + try/catch around body to capture crash)
         shell: bash
         run: |
           python - <<'PYEOF'
-          import re, pathlib
+          import pathlib
           p = pathlib.Path('windows/runner/main.cpp')
-          src = p.read_text()
-          old_pat = re.compile(
-              r'  if \(!::AttachConsole\(ATTACH_PARENT_PROCESS\) && ::IsDebuggerPresent\(\)\) \{\s*'
-              r'CreateAndAttachConsole\(\);\s*\}',
-              re.DOTALL
-          )
-          replacement = (
-              '  if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {\n'
-              '    if (::IsDebuggerPresent()) {\n'
-              '      CreateAndAttachConsole();\n'
-              '    } else {\n'
-              '      // Redirect stdio to NUL: GUI launch has no parent console; first\n'
-              '      // plugin/Dart write to stdout triggers ucrtbase __fastfail(7).\n'
-              '      FILE* dummy = nullptr;\n'
-              '      freopen_s(&dummy, "NUL", "w", stdout);\n'
-              '      freopen_s(&dummy, "NUL", "w", stderr);\n'
-              '    }\n'
-              '  }'
-          )
-          new_src, n = old_pat.subn(replacement, src)
-          if n != 1:
-              raise SystemExit(f'Patch did not match (n={n})')
+          new_src = '''#include <flutter/dart_project.h>
+          #include <flutter/flutter_view_controller.h>
+          #include <windows.h>
+          #include <exception>
+          #include <fstream>
+          #include <string>
+
+          #include "flutter_window.h"
+          #include "utils.h"
+
+          static void LogCrash(const char* what) {
+            wchar_t path[MAX_PATH] = L"";
+            DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", path, MAX_PATH);
+            std::wstring p = (len > 0) ? std::wstring(path) + L"\\\\CakeWallet_crash.log"
+                                       : L"C:\\\\CakeWallet_crash.log";
+            std::ofstream f(p, std::ios::app);
+            if (f.is_open()) f << "[crash] " << what << std::endl;
+          }
+
+          int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
+                                _In_ wchar_t *command_line, _In_ int show_command) {
+            if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {
+              if (::IsDebuggerPresent()) {
+                CreateAndAttachConsole();
+              } else {
+                FILE* dummy = nullptr;
+                freopen_s(&dummy, "NUL", "w", stdout);
+                freopen_s(&dummy, "NUL", "w", stderr);
+              }
+            }
+
+            // Global terminate handler — log unhandled C++ exception path
+            std::set_terminate([]() {
+              try { throw; }
+              catch (const std::exception& e) { LogCrash(e.what()); }
+              catch (...) { LogCrash("unknown C++ exception"); }
+              std::abort();
+            });
+
+            try {
+              ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+              flutter::DartProject project(L"data");
+              std::vector<std::string> command_line_arguments = GetCommandLineArguments();
+              project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
+              FlutterWindow window(project);
+              Win32Window::Point origin(10, 10);
+              Win32Window::Size size(1280, 720);
+              if (!window.Create(L"Cake Wallet", origin, size)) {
+                LogCrash("FlutterWindow::Create returned false");
+                return EXIT_FAILURE;
+              }
+              window.SetQuitOnClose(true);
+              ::MSG msg;
+              while (::GetMessage(&msg, nullptr, 0, 0)) {
+                ::TranslateMessage(&msg);
+                ::DispatchMessage(&msg);
+              }
+              ::CoUninitialize();
+              return EXIT_SUCCESS;
+            } catch (const std::exception& e) {
+              LogCrash(e.what());
+              return EXIT_FAILURE;
+            } catch (...) {
+              LogCrash("unknown exception in wWinMain");
+              return EXIT_FAILURE;
+            }
+          }
+          '''
+          # Remove leading 10-space indent (here-doc artifact)
+          import textwrap
+          new_src = textwrap.dedent(new_src)
           p.write_text(new_src)
-          print('main.cpp patched OK')
-          print('--- new wWinMain head ---')
-          print('\n'.join(new_src.splitlines()[:30]))
+          print('main.cpp rewritten with try/catch wrapper')
+          print('--- file head ---')
+          print('\n'.join(new_src.splitlines()[:20]))
           PYEOF
 
       - name: Patch cakewallet.bat to dequote arg (%1 -> %~1)
