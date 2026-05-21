@@ -193,38 +193,38 @@ jobs:
           "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Patch runner main.cpp (redirect stdio to NUL so GUI launch doesn't fastfail)
-        shell: pwsh
+        shell: bash
         run: |
-          # Flutter's default runner template only creates a console when a debugger
-          # is attached. Without a parent console, stdout/stderr are invalid HANDLEs.
-          # First plugin/Dart write to stdout triggers ucrtbase __fastfail(7) and
-          # the app dies silently for shell-launched (double-click / ShellExecute) users.
-          $f = "windows/runner/main.cpp"
-          $c = Get-Content $f -Raw
-          $old = "  if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {`r`n    CreateAndAttachConsole();`r`n  }"
-          $new = @"
-  if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {
-    if (::IsDebuggerPresent()) {
-      CreateAndAttachConsole();
-    } else {
-      // No parent console and no debugger: redirect stdio to NUL so that
-      // plugin/Dart writes to stdout/stderr do not trigger ucrtbase fastfail.
-      FILE* dummy = nullptr;
-      freopen_s(&dummy, "NUL", "w", stdout);
-      freopen_s(&dummy, "NUL", "w", stderr);
-    }
-  }
-"@
-          # Try CRLF first then LF
-          if ($c -notmatch [regex]::Escape("AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent")) {
-            Write-Error "Could not find pattern to patch in main.cpp"
-            $c
-            exit 1
-          }
-          $c = $c -replace "  if \(!::AttachConsole\(ATTACH_PARENT_PROCESS\) && ::IsDebuggerPresent\(\)\) \{[^\}]*\}", $new
-          Set-Content -Path $f -Value $c -NoNewline
-          Write-Host "--- patched main.cpp ---"
-          Get-Content $f | Select-Object -First 30
+          python - <<'PYEOF'
+          import re, pathlib
+          p = pathlib.Path('windows/runner/main.cpp')
+          src = p.read_text()
+          old_pat = re.compile(
+              r'  if \(!::AttachConsole\(ATTACH_PARENT_PROCESS\) && ::IsDebuggerPresent\(\)\) \{\s*'
+              r'CreateAndAttachConsole\(\);\s*\}',
+              re.DOTALL
+          )
+          replacement = (
+              '  if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {\n'
+              '    if (::IsDebuggerPresent()) {\n'
+              '      CreateAndAttachConsole();\n'
+              '    } else {\n'
+              '      // Redirect stdio to NUL: GUI launch has no parent console; first\n'
+              '      // plugin/Dart write to stdout triggers ucrtbase __fastfail(7).\n'
+              '      FILE* dummy = nullptr;\n'
+              '      freopen_s(&dummy, "NUL", "w", stdout);\n'
+              '      freopen_s(&dummy, "NUL", "w", stderr);\n'
+              '    }\n'
+              '  }'
+          )
+          new_src, n = old_pat.subn(replacement, src)
+          if n != 1:
+              raise SystemExit(f'Patch did not match (n={n})')
+          p.write_text(new_src)
+          print('main.cpp patched OK')
+          print('--- new wWinMain head ---')
+          print('\n'.join(new_src.splitlines()[:30]))
+          PYEOF
 
       - name: Patch cakewallet.bat to dequote arg (%1 -> %~1)
         shell: pwsh
