@@ -262,9 +262,10 @@ jobs:
               if 'catch (const std::exception&' in src:
                   print(f'already patched: {f}')
                   continue
+              # Insert std::exception + ... catches AFTER catch (DWORD e) — catch (...) must be LAST
               new_src, n = re.subn(
                   r'(    catch \(DWORD e\)\s*\{[^\}]+\})',
-                  r'    catch (const std::exception& e) {\n      result->Error("Exception", e.what(), flutter::EncodableValue(method));\n    }\n    catch (...) {\n      result->Error("Exception", "unknown C++ exception", flutter::EncodableValue(method));\n    }\n\1',
+                  r'\1\n    catch (const std::exception& e) {\n      result->Error("Exception", e.what(), flutter::EncodableValue(method));\n    }\n    catch (...) {\n      result->Error("Exception", "unknown C++ exception", flutter::EncodableValue(method));\n    }',
                   src
               )
               if n != 1:
