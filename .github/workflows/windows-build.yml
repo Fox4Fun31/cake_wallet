@@ -192,89 +192,6 @@ jobs:
           Write-Host "VC++ Redist path: $path"
           "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Patch runner main.cpp (NUL stdio + try/catch around body to capture crash)
-        shell: bash
-        run: |
-          python - <<'PYEOF'
-          import pathlib
-          p = pathlib.Path('windows/runner/main.cpp')
-          new_src = '''#include <flutter/dart_project.h>
-          #include <flutter/flutter_view_controller.h>
-          #include <windows.h>
-          #include <exception>
-          #include <fstream>
-          #include <string>
-
-          #include "flutter_window.h"
-          #include "utils.h"
-
-          static void LogCrash(const char* what) {
-            wchar_t path[MAX_PATH] = L"";
-            DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", path, MAX_PATH);
-            std::wstring p = (len > 0) ? std::wstring(path) + L"\\\\CakeWallet_crash.log"
-                                       : L"C:\\\\CakeWallet_crash.log";
-            std::ofstream f(p, std::ios::app);
-            if (f.is_open()) f << "[crash] " << what << std::endl;
-          }
-
-          int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
-                                _In_ wchar_t *command_line, _In_ int show_command) {
-            if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {
-              if (::IsDebuggerPresent()) {
-                CreateAndAttachConsole();
-              } else {
-                FILE* dummy = nullptr;
-                freopen_s(&dummy, "NUL", "w", stdout);
-                freopen_s(&dummy, "NUL", "w", stderr);
-              }
-            }
-
-            // Global terminate handler — log unhandled C++ exception path
-            std::set_terminate([]() {
-              try { throw; }
-              catch (const std::exception& e) { LogCrash(e.what()); }
-              catch (...) { LogCrash("unknown C++ exception"); }
-              std::abort();
-            });
-
-            try {
-              ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-              flutter::DartProject project(L"data");
-              std::vector<std::string> command_line_arguments = GetCommandLineArguments();
-              project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
-              FlutterWindow window(project);
-              Win32Window::Point origin(10, 10);
-              Win32Window::Size size(1280, 720);
-              if (!window.Create(L"Cake Wallet", origin, size)) {
-                LogCrash("FlutterWindow::Create returned false");
-                return EXIT_FAILURE;
-              }
-              window.SetQuitOnClose(true);
-              ::MSG msg;
-              while (::GetMessage(&msg, nullptr, 0, 0)) {
-                ::TranslateMessage(&msg);
-                ::DispatchMessage(&msg);
-              }
-              ::CoUninitialize();
-              return EXIT_SUCCESS;
-            } catch (const std::exception& e) {
-              LogCrash(e.what());
-              return EXIT_FAILURE;
-            } catch (...) {
-              LogCrash("unknown exception in wWinMain");
-              return EXIT_FAILURE;
-            }
-          }
-          '''
-          # Remove leading 10-space indent (here-doc artifact)
-          import textwrap
-          new_src = textwrap.dedent(new_src)
-          p.write_text(new_src)
-          print('main.cpp rewritten with try/catch wrapper')
-          print('--- file head ---')
-          print('\n'.join(new_src.splitlines()[:20]))
-          PYEOF
-
       - name: Patch cakewallet.bat to dequote arg (%1 -> %~1)
         shell: pwsh
         run: |
@@ -325,6 +242,37 @@ jobs:
               exit /b 1
             )
           )
+
+      - name: Patch flutter_secure_storage_windows plugin to catch std::exception
+        shell: bash
+        run: |
+          python - <<'PYEOF'
+          import pathlib, re
+          # Root-cause crash fix: plugin's HandleMethodCall has try { ... } catch (DWORD e) { ... }
+          # but Write/Read/Delete throw std::runtime_error which isn't caught → crash.
+          pub_cache = pathlib.Path.home() / 'AppData/Local/Pub/Cache'
+          candidates = []
+          for root in [pub_cache / 'git', pub_cache / 'hosted/pub.dev']:
+              if root.exists():
+                  candidates += list(root.glob('**/flutter_secure_storage_windows*/**/flutter_secure_storage_windows_plugin.cpp'))
+          if not candidates:
+              raise SystemExit('plugin cpp not found in pub cache; pub get must run first')
+          for f in candidates:
+              src = f.read_text(encoding='utf-8')
+              if 'catch (const std::exception&' in src:
+                  print(f'already patched: {f}')
+                  continue
+              new_src, n = re.subn(
+                  r'(    catch \(DWORD e\)\s*\{[^\}]+\})',
+                  r'    catch (const std::exception& e) {\n      result->Error("Exception", e.what(), flutter::EncodableValue(method));\n    }\n    catch (...) {\n      result->Error("Exception", "unknown C++ exception", flutter::EncodableValue(method));\n    }\n\1',
+                  src
+              )
+              if n != 1:
+                  print(f'WARN: patch did not match in {f}')
+                  continue
+              f.write_text(new_src, encoding='utf-8')
+              print(f'PATCHED: {f}')
+          PYEOF
 
       - name: Compile graphics (SVG -> .svg.vec into assets/new-ui)
         shell: bash
