@@ -77,9 +77,23 @@ jobs:
           mkdir -p scripts/monero_c/release/monero scripts/monero_c/release/wownero
           cp -v /tmp/monerc/x86_64-w64-mingw32/libmonero_wallet2_api_c.dll  scripts/monero_c/release/monero/x86_64-w64-mingw32_libwallet2_api_c.dll
           cp -v /tmp/monerc/x86_64-w64-mingw32/libwownero_wallet2_api_c.dll scripts/monero_c/release/wownero/x86_64-w64-mingw32_libwallet2_api_c.dll
-          # libssp-0.dll + libwinpthread-1.dll from mingw-w64 runtime
+          # libssp-0.dll from mingw-w64 runtime
           LIBSSP=$(find /usr -name 'libssp-0.dll' 2>/dev/null | head -1)
-          LIBWINPTHREAD=$(find /usr -name 'libwinpthread-1.dll' 2>/dev/null | head -1)
+          # libwinpthread-1.dll: apt's version (mingw-w64 v10) lacks pthread_cond_timedwait64
+          # which the monero/wownero DLLs (built with newer mingw-w64) require.
+          # Pull newer from MSYS2 (mingw-w64-x86_64-winpthreads).
+          MSYS2_URL=$(curl -s https://packages.msys2.org/package/mingw-w64-x86_64-winpthreads | grep -oE 'https://repo\.msys2\.org/mingw/mingw64/mingw-w64-x86_64-winpthreads-[0-9][^"]+\.pkg\.tar\.zst' | head -1)
+          if [ -z "$MSYS2_URL" ]; then
+            # Fallback: a known-good pinned URL
+            MSYS2_URL="https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-winpthreads-12.0.0-3-any.pkg.tar.zst"
+          fi
+          echo "Fetching newer winpthread from: $MSYS2_URL"
+          sudo apt-get install -y zstd
+          curl -sL -o /tmp/wpth.tar.zst "$MSYS2_URL"
+          zstd -d /tmp/wpth.tar.zst -o /tmp/wpth.tar
+          mkdir -p /tmp/wpth && tar -xf /tmp/wpth.tar -C /tmp/wpth
+          LIBWINPTHREAD=$(find /tmp/wpth -name 'libwinpthread-1.dll' | head -1)
+          echo "MSYS2 libwinpthread: $LIBWINPTHREAD"
           echo "libssp-0.dll: $LIBSSP"
           echo "libwinpthread-1.dll: $LIBWINPTHREAD"
           if [ -n "$LIBSSP" ]; then
